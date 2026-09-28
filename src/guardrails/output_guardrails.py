@@ -39,12 +39,14 @@ def content_filter(response: str) -> dict:
     issues = []
     redacted = response
 
+    # PII patterns to check
     PII_PATTERNS = {
-        "vn_phone": r"\b(0|\+84)\d{9,10}\b",
-        "email": r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}",
-        "national_id": r"\b\d{9}\b|\b\d{12}\b",
-        "api_key": r"\bsk-[a-zA-Z0-9-]+\b",
-        "password": r"(?:password|mật khẩu)\s*(?:is|[:=])\s*\S+",
+        "vn_phone": r"(?<!\d)(?:\+84|0)(?:[ .-]?\d){9,10}(?!\d)",
+        "email": r"\b[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}\b",
+        "national_id": r"\b(?:\d{9}|\d{12})\b",
+        "api_key": r"\bsk-[a-zA-Z0-9_-]{4,}\b",
+        "password": r"\bpassword\s*(?:is\s*)?[:=]?\s*\S+|mật\s*khẩu\s*(?:là\s*)?[:=]?\s*\S+",
+        "database_host": r"\b[\w.-]+\.internal(?::\d+)?\b",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -55,11 +57,11 @@ def content_filter(response: str) -> dict:
 
     try:
         from core.config import DEMO_SECRETS
-        for s in DEMO_SECRETS:
-            if s and s in redacted:
-                issues.append(f"demo_secret: {s}")
-                redacted = redacted.replace(s, "[REDACTED]")
-    except Exception:
+        for secret in DEMO_SECRETS:
+            if secret and secret.casefold() in redacted.casefold():
+                issues.append("demo_secret: 1 found")
+                redacted = re.sub(re.escape(secret), "[REDACTED]", redacted, flags=re.IGNORECASE)
+    except (ImportError, AttributeError):
         pass
 
     return {
@@ -179,23 +181,16 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        filter_result = content_filter(response_text)
-        if not filter_result["safe"]:
+        result = content_filter(response_text)
+        if not result["safe"]:
             self.redacted_count += 1
-            if hasattr(llm_response, "content") and llm_response.content:
-                llm_response.content.parts = [
-                    types.Part.from_text(text=filter_result["redacted"])
-                ]
+            llm_response.content.parts = [types.Part.from_text(text=result["redacted"])]
 
         if self.use_llm_judge:
-            judge_res = await llm_safety_check(response_text)
-            if not judge_res.get("safe", True):
+            judge_result = await llm_safety_check(result["redacted"])
+            if not judge_result.get("safe", True):
                 self.blocked_count += 1
-                if hasattr(llm_response, "content") and llm_response.content:
-                    llm_response.content.parts = [
-                        types.Part.from_text(text="Response blocked by safety judge.")
-                    ]
-
+                llm_response.content.parts = [types.Part.from_text(text="Response blocked by safety judge.")]
         return llm_response
 
 
