@@ -15,6 +15,7 @@ from google.adk.agents import llm_agent
 from google.adk import runners
 from google.adk.plugins import base_plugin
 from google.adk.agents.invocation_context import InvocationContext
+from google.adk.models import LlmResponse
 from google.genai import types
 
 from agents.security_boundary import (
@@ -186,16 +187,32 @@ class GuardsInputPlugin(base_plugin.BasePlugin):
         self, *, invocation_context: InvocationContext, user_message: types.Content
     ) -> types.Content | None:
         self.total_count += 1
-        text = self._text(user_message)
+        return None
+
+    async def before_model_callback(self, *, callback_context, llm_request):
+        text = next(
+            (
+                self._text(content)
+                for content in reversed(llm_request.contents or [])
+                if content.role == "user"
+            ),
+            "",
+        )
         if detect_injection_strong(text):
             self.blocked_count += 1
-            return self._block(
-                "I cannot process that request. I only help with VinBank banking questions."
+            return LlmResponse(
+                content=self._block(
+                    "I cannot process that request. I only help with VinBank banking questions."
+                ),
+                turn_complete=True,
             )
         if topic_filter_strong(text):
             self.blocked_count += 1
-            return self._block(
-                "I'm a VinBank assistant and can only help with banking-related questions."
+            return LlmResponse(
+                content=self._block(
+                    "I'm a VinBank assistant and can only help with banking-related questions."
+                ),
+                turn_complete=True,
             )
         return None
 
